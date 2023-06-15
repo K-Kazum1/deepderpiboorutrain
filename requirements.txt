@@ -1,0 +1,8 @@
+torch
+torchvision
+numpy
+Pillow
+open_clip_torch
+safetensors
+einops
+wandb
