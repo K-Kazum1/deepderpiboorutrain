@@ -12,18 +12,18 @@ from safetensors.torch import load_file, save_file
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", default = 'jar/model.cookie')
 parser.add_argument("--model_size", type=int, default = 1280)
+parser.add_argument("--model_name", default = 'ViT-bigG-14')
 parser.add_argument("--device", choices = ['cpu', 'cuda'], default = 'cpu')
 
 args = parser.parse_args()
 
 device = args.device
 
-taglist = [i for i in open("tags",'r').read().split('\n') if i]
+taglist = [i for i in open("../tags",'r').read().split('\n') if i]
 
 
 model, _, preprocess = open_clip.create_model_and_transforms(
-  model_name="ViT-bigG-14",
-  pretrained="laion2b_s39b_b160k"
+  model_name=args.model_name
 )
 
 model.to("cpu")

@@ -18,6 +18,8 @@ parser.add_argument("--wandb", default = '')
 parser.add_argument("--train_base", action = 'store_true')
 parser.add_argument("--train_conv", action = 'store_true')
 parser.add_argument("--load", action = 'store_true')
+parser.add_argument("--model_name", default = 'ViT-bigG-14')
+parser.add_argument("--model_pretrained", default = 'laion2b_s39b_b160k')
 parser.add_argument("--silent", action = 'store_true')
 parser.add_argument("--skip_high_loss", action = 'store_true')
 parser.add_argument("--lr", default = 3e-4,type=float)
@@ -36,8 +38,8 @@ if device == 'cpu':
 
 imagedir =  args.image_dir
 print('loading tags')
-taglist = open("tags",'r').read().split('\n')
-tags = json.load(open('tags.json'))
+taglist = open("../tags",'r').read().strip().split('\n')
+tags = json.load(open('../tags.json'))
 
 
 def get_params(layers):
@@ -140,8 +142,8 @@ class ImagesDataset(torch.utils.data.Dataset):
 print('loading model')
 
 model, _, preprocess = open_clip.create_model_and_transforms(
-  model_name="ViT-bigG-14",
-  pretrained="laion2b_s39b_b160k"
+  model_name=args.model_name,
+  pretrained=args.pretrained
 )
 
 model.to("cpu")
@@ -151,30 +153,37 @@ model.to(torch.float32)
 model.train(False)
 model.requires_grad_(False)# want to turn off training for the base weights and only train the lora/convolution/linear layers
 
+modelconv =  model.trunk.patch_embed.proj if isinstance(model,open_clip.timm_model.TimmModel) else model.conv1
+
 if args.train_conv:
+    model.to("cpu")
+    modelconv.to("cuda")
     conv1 = DepthwiseSeparableConv(    3,     104, kernel_size=5, stride=5)
     conv2 = DepthwiseSeparableConv(  104,   416, kernel_size=4, stride=4)
-    conv3 = DepthwiseSeparableConv(416, 1664, kernel_size=4, stride=4)
+    conv3 = DepthwiseSeparableConv(416, modelconv.out_channels, kernel_size=4, stride=4,bias = isinstance(modelconv.bias,torch.nn.parameter.Parameter))
     weights = get_params([conv1,conv2,conv3])
-    conv = model.conv1
+    conv = modelconv
 
     preprocess.transforms[0] = Resize(size=1280, interpolation=Image.BICUBIC)
     preprocess.transforms[1] = CenterCrop(size=1280)
 else:
     if args.train_base:
-
-        convs = [model.conv1]
+        
+        convs = [modelconv]
     else:
         conv1 = DepthwiseSeparableConv(    3,     104, kernel_size=5, stride=5)
         conv2 = DepthwiseSeparableConv(  104,   416, kernel_size=4, stride=4)
-        conv3 = DepthwiseSeparableConv(416, 1664, kernel_size=4, stride=4)
+        conv3 = DepthwiseSeparableConv(416, modelconv.out_channels, kernel_size=4, stride=4)
 
-        model.conv1 = torch.nn.Sequential(conv1,conv2,conv3)
+        modelconv = torch.nn.Sequential(conv1,conv2,conv3)
 
         convs = [conv1,conv2,conv3]
 
         preprocess.transforms[0] = Resize(size=1280, interpolation=Image.BICUBIC)
         preprocess.transforms[1] = CenterCrop(size=1280)
+
+        if isinstance(model,open_clip.timm_model.TimmModel):
+            model.trunk.patch_embed.img_size  = (1280, 1280)
         
 
     if args.load:
@@ -198,7 +207,13 @@ else:
     else:
 
         lorafy(model,4)
-        linear = torch.nn.Linear(model.output_dim,len(taglist))
+
+        if isinstance(model,open_clip.timm_model.TimmModel):
+            output_dim = model.trunk.head.LoRAout.out_features
+        else:
+            output_dim = model.output_dim
+
+        linear = torch.nn.Linear(output_dim,len(taglist))
 
         model = torch.nn.Sequential(model,linear)
 
@@ -209,6 +224,13 @@ else:
         model = surgery(model,len(taglist))
 
     weights = list(weights.values()) + get_params(convs+[linear])    
+
+    if isinstance(model[0],open_clip.timm_model.TimmModel):
+        model[0].trunk.patch_embed.proj = modelconv
+    else:
+        model[0].conv1 = modelconv
+    model.to('cuda')
+
 
 
 print('model ready')
@@ -221,11 +243,11 @@ if os.path.exists(f:='jar/mean'):
     mean = load_file(f)['mean']
 else:
     print('getting tag frequency')
-    mean = torch.stack(tuple([tag2tensor(i) for i in tags])).float().mean(0)
+    with torch.no_grad():
+        mean = torch.stack(tuple([tag2tensor(i) for i in tags])).float().mean(0)
     save_file({'mean':mean},f)
 
 mean = mean.to(device)
-
 
 
 
@@ -303,7 +325,7 @@ def train():
             train_it = forever(dataloader)
             x,y,ids = next(train_it)
 
-        loss = lossf(model(x),y)
+        loss = lossf(x:=model(x),y)
 
         if args.wandb:
             wandb.log({"loss": loss.item(),'epoch':i})

@@ -52,10 +52,10 @@ class MultiheadAttention(nn.Module):# equivalent to torch.nn.MultiheadAttention,
         return out,qk
 
 class DepthwiseSeparableConv(torch.nn.Module):
-    def __init__(self, nin, nout, kernel_size, stride):
+    def __init__(self, nin, nout, kernel_size, stride,bias=False):
         super(DepthwiseSeparableConv, self).__init__()
         self.depthwise = torch.nn.Conv2d(nin, nin, kernel_size=kernel_size, stride=stride, groups=nin, bias=False)
-        self.pointwise = torch.nn.Conv2d(nin, nout, kernel_size=1, bias=False)
+        self.pointwise = torch.nn.Conv2d(nin, nout, kernel_size=1, bias=bias)
 
     def forward(self, x):
         out = self.depthwise(x)
