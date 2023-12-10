@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import einops
 import numpy as np
-
+import timm
 
 class LoRALinear(nn.Module):
     def __init__(self,linear,dim):
@@ -33,16 +33,17 @@ class LoRALinear(nn.Module):
         return self
 
 class MultiheadAttention(nn.Module):# equivalent to torch.nn.MultiheadAttention, but it does something weird so reimplemented it
-    def __init__(self, d_model, n_head):
+    def __init__(self, d_model, n_head,EVA=False):
         super().__init__()
         self.n_head = n_head
         self.out_proj = nn.Linear(d_model, d_model)
         self.in_proj = nn.Linear(d_model, 3*d_model)
+        self.EVA = EVA
 
     def forward(self, x, *args,**kwargs):
         x=x.permute(1, 0, 2)
         qkv = self.in_proj(x)
-        q, k, v = einops.rearrange(qkv,'n k (p h c) -> p n h k c', p=3, h=self.n_head)
+        q, k, v = einops.rearrange(qkv,'n k (p h c) -> p k h n c' if self.EVA else 'n k (p h c) -> p n h k c', p=3, h=self.n_head)
         qk = torch.einsum('nhqc,nhkc->nhqk', q, k) / np.sqrt(q.shape[-1])
         qk = nn.functional.softmax(qk, dim=-1)
         out = torch.einsum('nhqk,nhkc->nhqc', qk, v)
@@ -70,6 +71,10 @@ def lorafy(module,dim):
             module._modules[name].in_proj.weight = layer.in_proj_weight
             module._modules[name].in_proj.bias = layer.in_proj_bias
             layer = module._modules[name]
+        if isinstance(layer, timm.models.eva.EvaAttention):
+            module._modules[name] = MultiheadAttention(layer.qkv.in_features,layer.num_heads, EVA = True)
+            module._modules[name].out_proj = layer.proj
+            module._modules[name].in_proj = layer.qkv
         lorafy(layer,dim)
         if isinstance(layer, nn.Linear):
             module._modules[name] = LoRALinear(layer,dim)
@@ -92,6 +97,10 @@ def loadlora(module,train=True,n='',w={}):
                 module._modules[name].in_proj.weight = layer.in_proj_weight
                 module._modules[name].in_proj.bias = layer.in_proj_bias
                 layer = module._modules[name]
+            if isinstance(layer, timm.models.eva.EvaAttention):
+                module._modules[name] = MultiheadAttention(layer.qkv.in_features,layer.num_heads, EVA = True)
+                module._modules[name].out_proj = layer.proj
+                module._modules[name].in_proj = layer.qkv
             loadlora(layer,train,f'{n}_{name}',w)
             if isinstance(layer, nn.Linear):
                 module._modules[name] = LoRALinear(layer,1)

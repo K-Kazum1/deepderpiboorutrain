@@ -143,7 +143,7 @@ print('loading model')
 
 model, _, preprocess = open_clip.create_model_and_transforms(
   model_name=args.model_name,
-  pretrained=args.pretrained
+  pretrained=args.model_pretrained
 )
 
 model.to("cpu")
